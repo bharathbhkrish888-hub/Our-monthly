@@ -13,7 +13,7 @@ if (isIOS() && isStandalone() && /\.(web\.app|firebaseapp\.com)$/.test(location.
 const app = initializeApp(cfg);
 const auth = A.getAuth(app);
 const db = F.getFirestore(app);
-const { doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc, collection, onSnapshot, query, where, orderBy, limit, writeBatch, arrayUnion, arrayRemove, serverTimestamp } = F;
+const { doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc, collection, onSnapshot, query, where, orderBy, limit, writeBatch, arrayUnion, arrayRemove, serverTimestamp, deleteField } = F;
 
 export async function init() {
   try { await A.getRedirectResult(auth); } catch (e) { console.warn("redirect result", e); }
@@ -89,7 +89,7 @@ export const setTick = (cid, gid, date, on) => updateDoc(doc(db, "couples", cid,
 export const deleteGoal = (cid, gid) => deleteDoc(doc(db, "couples", cid, "goals", gid));
 
 export function subscribeNotes(cid, cb) {
-  const q = query(collection(db, "couples", cid, "notes"), orderBy("createdAt", "desc"), limit(40));
+  const q = query(collection(db, "couples", cid, "notes"), orderBy("createdAt", "desc"), limit(80));
   return onSnapshot(q, (s) => cb(s.docs.map((d) => ({ id: d.id, ...d.data(), at: d.data().createdAt?.toMillis?.() || Date.now() }))), (e) => console.error(e));
 }
 export const addNote = (cid, uid, text) => addDoc(collection(db, "couples", cid, "notes"), { from: uid, text, createdAt: serverTimestamp() });
@@ -113,3 +113,29 @@ export async function enablePush(uid) {
   await setDoc(doc(db, "users", uid), { fcmTokens: arrayUnion(token) }, { merge: true });
   return { ok: true };
 }
+
+// ---- Memories (photos stored inside Firestore, compressed on the phone: free plan friendly) ----
+export function subscribeMemories(cid, cb) {
+  const q = query(collection(db, "couples", cid, "memories"), orderBy("createdAt", "desc"), limit(80));
+  return onSnapshot(q, (s) => cb(s.docs.map((d) => ({ id: d.id, ...d.data(), at: d.data().createdAt?.toMillis?.() || Date.now() }))), (e) => console.error(e));
+}
+export async function addMemory(cid, uid, m) {
+  const ref = doc(collection(db, "couples", cid, "memories"));
+  const b = writeBatch(db);
+  b.set(ref, { from: uid, caption: m.caption || "", thumb: m.thumb, reactions: {}, saved: false, createdAt: serverTimestamp() });
+  b.set(doc(db, "couples", cid, "memories", ref.id, "full", "img"), { from: uid, data: m.full });
+  await b.commit();
+}
+export async function getFull(cid, id) {
+  const s = await getDoc(doc(db, "couples", cid, "memories", id, "full", "img"));
+  return s.exists() ? s.data().data : null;
+}
+export async function deleteMemory(cid, id) {
+  const b = writeBatch(db);
+  b.delete(doc(db, "couples", cid, "memories", id, "full", "img"));
+  b.delete(doc(db, "couples", cid, "memories", id));
+  await b.commit();
+}
+export const setReaction = (cid, id, uid, emoji) =>
+  updateDoc(doc(db, "couples", cid, "memories", id), { ["reactions." + uid]: emoji ? emoji : deleteField() });
+export const saveMemory = (cid, id) => updateDoc(doc(db, "couples", cid, "memories", id), { saved: true });
